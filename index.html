@@ -25,6 +25,8 @@
     #map {
       width: 100vw; height: 100vh;
       position: absolute; top: 0; left: 0; z-index: 1;
+      /* 讓地圖的滑鼠標籤變成可點擊的手勢 */
+      cursor: crosshair; 
     }
 
     #rain-canvas {
@@ -61,7 +63,7 @@
     .summary-footer { padding: 20px 22px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; }
     .total-avg-val { font-family: 'Orbitron', sans-serif; font-size: 18px; font-weight: 700; color: #ffb800; }
 
-    /* 新增：右下角模擬控制台 */
+    /* 右下角模擬控制台 */
     #sim-panel { position: absolute; bottom: 25px; right: 25px; z-index: 1000; width: 340px; }
     .sim-body { padding: 20px; }
     .custom-select { width: 100%; padding: 10px; margin-bottom: 15px; background: rgba(0,0,0,0.6); color: #00d4ff; border: 1px solid rgba(0, 212, 255, 0.5); border-radius: 6px; font-size: 15px; outline: none; font-family: 'Noto Sans TC', sans-serif; }
@@ -167,7 +169,7 @@
     };
 
     let markersLayer = L.layerGroup().addTo(map);
-    let isSimulating = false; // 全局模擬狀態旗標
+    let isSimulating = false; 
 
     function getRainColor(mm) {
       if (mm <= 0.0) return '#00d4ff'; 
@@ -176,7 +178,7 @@
       return '#ff1744';                
     }
 
-    // --- Canvas 粒子特效系統 ---
+    // --- Canvas 粒子與遮罩特效系統 ---
     const canvas = document.getElementById('rain-canvas');
     const ctx = canvas.getContext('2d');
     let width = canvas.width = window.innerWidth;
@@ -185,49 +187,124 @@
 
     let rainZones = []; 
     let particles = [];
+    let suns = []; // 用來存放太陽特效的陣列
     const MAX_PARTICLES = 600;
 
-    function renderRain() {
+    // 監聽地圖點擊事件，產生太陽特效
+    map.on('click', function(e) {
+      suns.push({
+        latlng: e.latlng,
+        life: 120,     // 存活時間 (影格數，約 2 秒)
+        maxLife: 120,
+        rotation: 0
+      });
+    });
+
+    function renderEffects() {
       ctx.clearRect(0, 0, width, height);
+
+      // 1. 繪製太陽特效 (獨立於雨水裁切之外，確保點哪裡都能顯示)
+      for (let i = suns.length - 1; i >= 0; i--) {
+        let sun = suns[i];
+        let p = map.latLngToContainerPoint(sun.latlng); // 確保地圖拖曳時太陽會跟著移動
+        sun.life--;
+
+        if (sun.life <= 0) {
+          suns.splice(i, 1);
+          continue;
+        }
+
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        sun.rotation += 0.015; // 旋轉動畫
+        ctx.rotate(sun.rotation);
+
+        // 動態計算透明度 (前段淡入，後段淡出)
+        let alpha = sun.life > 100 ? (120 - sun.life) / 20 : sun.life / 40;
+        if (alpha > 1) alpha = 1;
+        ctx.globalAlpha = alpha;
+
+        // 畫太陽主體中心
+        ctx.beginPath();
+        ctx.arc(0, 0, 16, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffde00';
+        ctx.shadowColor = '#ff9d00';
+        ctx.shadowBlur = 20;
+        ctx.fill();
+
+        // 畫太陽光芒
+        for (let j = 0; j < 8; j++) {
+          ctx.rotate(Math.PI / 4);
+          ctx.beginPath();
+          ctx.moveTo(22, 0);
+          ctx.lineTo(36, 0);
+          ctx.strokeStyle = '#ffde00';
+          ctx.lineWidth = 4;
+          ctx.lineCap = 'round';
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // 2. 繪製局部降雨特效
       const activeScreenZones = rainZones.map(zone => {
         const point = map.latLngToContainerPoint(zone.latlng);
-        return { x: point.x, y: point.y, r: 50 + (zone.rain * 4), rain: zone.rain };
-      }).filter(z => z.x > 0 && z.x < width && z.y > 0 && z.y < height);
+        return { x: point.x, y: point.y, r: 70 + (zone.rain * 3), rain: zone.rain };
+      }).filter(z => z.x > -100 && z.x < width + 100 && z.y > -100 && z.y < height + 100);
 
-      if (activeScreenZones.length > 0 && particles.length < MAX_PARTICLES) {
-        const target = activeScreenZones[Math.floor(Math.random() * activeScreenZones.length)];
-        const spawnCount = Math.min(Math.floor(target.rain / 2) + 1, 5); 
-        for(let i = 0; i < spawnCount; i++) {
-          particles.push({
-            x: target.x + (Math.random() * target.r * 2 - target.r),
-            y: target.y - target.r - (Math.random() * 100),
-            length: Math.random() * 10 + 10 + (target.rain * 0.5),
-            speed: Math.random() * 5 + 10 + (target.rain * 0.3),
-            wind: Math.random() * 2 + 1,
-            opacity: Math.random() * 0.4 + 0.2
-          });
-        }
-      }
-
-      for (let i = particles.length - 1; i >= 0; i--) {
-        let p = particles[i];
-        p.y += p.speed;
-        p.x += p.wind; 
+      if (activeScreenZones.length > 0) {
+        
+        ctx.save();
+        // --- 建立遮罩 (Clipping Mask) ---
+        // 讓雨滴只會出現在各個氣象站點的圓形影響範圍內
         ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(p.x + p.wind, p.y + p.length);
-        ctx.strokeStyle = `rgba(136, 212, 255, ${p.opacity})`;
-        ctx.lineWidth = 1;
-        ctx.stroke();
-        if (p.y > height || p.x > width) particles.splice(i, 1);
+        activeScreenZones.forEach(zone => {
+          ctx.moveTo(zone.x + zone.r, zone.y);
+          ctx.arc(zone.x, zone.y, zone.r, 0, Math.PI * 2);
+        });
+        ctx.clip(); // 啟動遮罩限制
+
+        // 生成雨滴粒子
+        if (particles.length < MAX_PARTICLES) {
+          const target = activeScreenZones[Math.floor(Math.random() * activeScreenZones.length)];
+          const spawnCount = Math.min(Math.floor(target.rain / 2) + 1, 5); 
+          for(let i = 0; i < spawnCount; i++) {
+            particles.push({
+              x: target.x + (Math.random() * target.r * 2 - target.r),
+              y: target.y - target.r - (Math.random() * 50), // 從圓形遮罩頂部開始落下
+              length: Math.random() * 10 + 10 + (target.rain * 0.5),
+              speed: Math.random() * 5 + 10 + (target.rain * 0.3),
+              wind: Math.random() * 2 + 1,
+              opacity: Math.random() * 0.4 + 0.2
+            });
+          }
+        }
+
+        // 移動與畫出雨滴
+        for (let i = particles.length - 1; i >= 0; i--) {
+          let p = particles[i];
+          p.y += p.speed;
+          p.x += p.wind; 
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(p.x + p.wind, p.y + p.length);
+          ctx.strokeStyle = `rgba(136, 212, 255, ${p.opacity})`;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          if (p.y > height || p.x > width) particles.splice(i, 1);
+        }
+        
+        ctx.restore(); // 釋放遮罩，避免影響下一幀的全局繪製
       }
-      requestAnimationFrame(renderRain);
+
+      requestAnimationFrame(renderEffects);
     }
-    renderRain();
+    renderEffects();
 
     // --- 資料更新邏輯 ---
     async function fetchData() {
-      if(isSimulating) return; // 如果正在模擬，不抓取真實資料覆蓋畫面
+      if(isSimulating) return; 
       
       try {
         const url = encodeURIComponent('https://wic.gov.taipei/OpenData/API/Rain/Get?stationNo=&loginId=open_rain&dataKey=85452C1D');
@@ -242,7 +319,6 @@
     }
 
     function updateSystem(rawData) {
-      // ✅ 修改處：確保同時支援 API 格式 (stationName/recTime) 與模擬資料格式 (name/time)
       const stations = (Array.isArray(rawData) ? rawData : []).map(item => ({
         name: (item.stationName || item.name || '').trim(),
         rain: parseFloat(item.rain) > 0 ? parseFloat(item.rain) : 0,
@@ -282,7 +358,6 @@
         }
       });
 
-      // 根據是否模擬更換 UI 狀態
       if (isSimulating) {
         document.getElementById('update-time').innerText = `SIMULATION MODE : ${latestTime}`;
         document.getElementById('status-dot').className = 'live-dot sim-mode';
@@ -325,7 +400,6 @@
       return [ { name: '南港', rain: 15.4, time: t }, { name: '信義', rain: 9.2, time: t }, { name: '社子', rain: 2.1, time: t } ];
     }
 
-    // --- 模擬器控制事件 ---
     document.getElementById('btn-start-sim').addEventListener('click', () => {
       const targetDistrict = document.getElementById('sim-district').value;
       if (!targetDistrict) return alert("請先從下拉選單選擇一個行政區！");
@@ -334,7 +408,6 @@
       let fakeData = [];
       const t = new Date().toLocaleString('zh-TW', { hour12: false });
       
-      // 產生模擬資料：選擇的區域下豪雨，其他區域歸零
       Object.keys(DISTRICT_MAP).forEach(dist => {
         DISTRICT_MAP[dist].forEach(stationName => {
           fakeData.push({
@@ -350,11 +423,11 @@
 
     document.getElementById('btn-stop-sim').addEventListener('click', () => {
       isSimulating = false;
-      fetchData(); // 立即抓取真實資料覆蓋回來
+      fetchData(); 
     });
 
     fetchData();
-    setInterval(fetchData, 300000); // 每5分鐘檢查一次 (若模擬中則略過)
+    setInterval(fetchData, 300000); 
   </script>
 </body>
 </html>
