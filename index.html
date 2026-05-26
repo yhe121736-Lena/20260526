@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>臺北市水利處資訊系統 - 動態落雨與模擬版</title>
+  
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Noto+Sans+TC:wght@300;500;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-glass: rgba(16, 22, 34, 0.75);
+      --border-glow: rgba(0, 212, 255, 0.25);
+      --text-main: #f0f4f8;
+      --accent-cyan: #00d4ff;
+    }
+
+    body {
+      margin: 0; padding: 0; overflow: hidden;
+      font-family: 'Noto Sans TC', sans-serif; background-color: #0c0f1d;
+    }
+
+    #map {
+      width: 100vw; height: 100vh;
+      position: absolute; top: 0; left: 0; z-index: 1;
+    }
+
+    #rain-canvas {
+      width: 100vw; height: 100vh;
+      position: absolute; top: 0; left: 0;
+      z-index: 500; pointer-events: none;
+    }
+
+    .glass-card {
+      background: var(--bg-glass); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--border-glow); box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+      border-radius: 12px; color: var(--text-main);
+    }
+
+    /* 左上角標題面板 */
+    #title-panel { position: absolute; top: 25px; left: 25px; z-index: 1000; padding: 18px 25px; transition: 0.3s; }
+    .title-main { font-size: 22px; font-weight: 700; letter-spacing: 1px; background: linear-gradient(45deg, #ffffff, #88d4ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .title-time { font-family: 'Share Tech Mono', monospace; font-size: 13px; color: #7a8fa5; margin-top: 5px; display: flex; align-items: center; gap: 6px; }
+    .live-dot { width: 8px; height: 8px; background-color: #00ff88; border-radius: 5px; display: inline-block; box-shadow: 0 0 8px #00ff88; animation: pulse 2s infinite; }
+    .live-dot.sim-mode { background-color: #ffb800; box-shadow: 0 0 8px #ffb800; }
+
+    /* 右側面板 */
+    #summary-panel { position: absolute; top: 25px; right: 25px; z-index: 1000; width: 340px; height: calc(100vh - 280px); display: flex; flex-direction: column; }
+    .summary-header { padding: 22px; font-size: 16px; font-weight: 700; color: #ffb800; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .summary-list { flex: 1; overflow-y: auto; padding: 10px 15px; }
+    .summary-list::-webkit-scrollbar { width: 5px; }
+    .summary-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+    .summary-item { padding: 12px 10px; margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.03); }
+    .item-meta { display: flex; justify-content: space-between; align-items: center; }
+    .district-name { font-size: 15px; font-weight: 500; }
+    .district-data { font-family: 'Orbitron', sans-serif; font-size: 14px; font-weight: 700; }
+    .rain-bar-bg { width: 100%; height: 4px; background: rgba(255,255,255,0.08); margin-top: 6px; border-radius: 2px; overflow: hidden; }
+    .rain-bar-fill { height: 100%; width: 0%; transition: width 0.6s ease-in-out; border-radius: 2px; }
+    .summary-footer { padding: 20px 22px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; }
+    .total-avg-val { font-family: 'Orbitron', sans-serif; font-size: 18px; font-weight: 700; color: #ffb800; }
+
+    /* 新增：右下角模擬控制台 */
+    #sim-panel { position: absolute; bottom: 25px; right: 25px; z-index: 1000; width: 340px; }
+    .sim-body { padding: 20px; }
+    .custom-select { width: 100%; padding: 10px; margin-bottom: 15px; background: rgba(0,0,0,0.6); color: #00d4ff; border: 1px solid rgba(0, 212, 255, 0.5); border-radius: 6px; font-size: 15px; outline: none; font-family: 'Noto Sans TC', sans-serif; }
+    .custom-select option { background: #0c0f1d; color: #fff; }
+    .btn-sim { background: rgba(0, 212, 255, 0.15); color: #00d4ff; border: 1px solid #00d4ff; width: 100%; padding: 10px; border-radius: 6px; cursor: pointer; margin-bottom: 10px; font-weight: bold; transition: 0.2s; }
+    .btn-sim:hover { background: rgba(0, 212, 255, 0.4); box-shadow: 0 0 10px rgba(0,212,255,0.5); }
+    .btn-reset { background: rgba(255, 184, 0, 0.15); color: #ffb800; border: 1px solid #ffb800; width: 100%; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+    .btn-reset:hover { background: rgba(255, 184, 0, 0.4); box-shadow: 0 0 10px rgba(255,184,0,0.5); }
+
+    /* 左下角圖例 */
+    #legend-panel { position: absolute; bottom: 25px; left: 25px; z-index: 1000; padding: 15px 20px; font-size: 12px; }
+    .legend-title { font-weight: bold; margin-bottom: 8px; color: #88ffa5; text-transform: uppercase; }
+    .legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+    .legend-color { width: 12px; height: 12px; border-radius: 5px; }
+
+    /* Popup 美化 */
+    .leaflet-popup-content-wrapper { background: rgba(12, 16, 27, 0.9) !important; border: 1px solid rgba(0, 212, 255, 0.3); box-shadow: 0 10px 30px rgba(0,0,0,0.6) !important; backdrop-filter: blur(8px); color: #fff !important; border-radius: 8px; }
+    .leaflet-popup-tip { background: rgba(12, 16, 27, 0.9) !important; border: 1px solid rgba(0, 212, 255, 0.3); }
+    .popup-container { padding: 4px; }
+    .popup-title { font-size: 15px; font-weight: 700; color: #ffb800; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; margin-bottom: 6px; }
+    .popup-row { display: flex; justify-content: space-between; gap: 20px; font-size: 13px; }
+    .popup-value { font-family: 'Orbitron', sans-serif; font-weight: bold; color: var(--accent-cyan); }
+
+    .watermark { position: absolute; bottom: 12px; right: 380px; z-index: 1000; font-family: 'Share Tech Mono', monospace; color: rgba(255, 255, 255, 0.15); font-size: 13px; letter-spacing: 2px; pointer-events: none; }
+
+    @keyframes pulse {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.7); }
+      70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(0, 255, 136, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 255, 136, 0); }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="map"></div>
+  <canvas id="rain-canvas"></canvas>
+
+  <div id="title-panel" class="glass-card">
+    <div class="title-main">臺北市即時雨量監測矩陣</div>
+    <div class="title-time"><span id="status-dot" class="live-dot"></span><span id="update-time">SYSTEM ONLINE</span></div>
+  </div>
+
+  <div id="summary-panel" class="glass-card">
+    <div class="summary-header">📊 各行政區雨量摘要</div>
+    <div class="summary-list" id="district-list"></div>
+    <div class="summary-footer">
+      <span style="font-weight: 500; color: #a0b0c0;">城市平均降雨量</span>
+      <span class="total-avg-val" id="total-avg">0.00 mm</span>
+    </div>
+  </div>
+
+  <div id="sim-panel" class="glass-card">
+    <div class="summary-header" style="color: #00d4ff; border-bottom-color: rgba(0,212,255,0.2);">🎮 降雨模擬控制台</div>
+    <div class="sim-body">
+      <select id="sim-district" class="custom-select">
+        <option value="">-- 請選擇模擬區域 --</option>
+        <option value="北投區">北投區</option>
+        <option value="士林區">士林區</option>
+        <option value="內湖區">內湖區</option>
+        <option value="中山區">中山區</option>
+        <option value="松山區">松山區</option>
+        <option value="南港區">南港區</option>
+        <option value="大安區">大安區</option>
+        <option value="信義區">信義區</option>
+        <option value="中正區">中正區</option>
+        <option value="大同區">大同區</option>
+        <option value="萬華區">萬華區</option>
+        <option value="文山區">文山區</option>
+      </select>
+      <button id="btn-start-sim" class="btn-sim">啟動局部豪雨模擬</button>
+      <button id="btn-stop-sim" class="btn-reset">恢復真實即時數據</button>
+    </div>
+  </div>
+
+  <div id="legend-panel" class="glass-card">
+    <div class="legend-title">降雨強度分級 (mm)</div>
+    <div class="legend-item"><div class="legend-color" style="background:#00d4ff;"></div><span>無降雨 (0.0)</span></div>
+    <div class="legend-item"><div class="legend-color" style="background:#00ff88;"></div><span>微量雨 (&lt; 1.0)</span></div>
+    <div class="legend-item"><div class="legend-color" style="background:#ffb800;"></div><span>陣雨偏高 (1.0 - 10.0)</span></div>
+    <div class="legend-item"><div class="legend-color" style="background:#ff1744;"></div><span>豪大雨 (&gt; 10.0)</span></div>
+  </div>
+
+  <div class="watermark">414730191</div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([25.065, 121.555], 12);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 18 }).addTo(map);
+
+    const STATION_COORDS = {
+      "貴子坑": [25.1583, 121.4916], "百拉卡": [25.1852, 121.5283], "社子": [25.1050, 121.4880], "溪山": [25.1200, 121.5700],
+      "內湖": [25.0711, 121.5858], "大湖": [25.0847, 121.6022], "中山": [25.0620, 121.5330], "大直": [25.0830, 121.5450],
+      "松山": [25.0500, 121.5650], "民生": [25.0580, 121.5550], "南港": [25.0530, 121.6150], "舊莊": [25.0300, 121.6250],
+      "大安": [25.0263, 121.5367], "公館": [25.0150, 121.5330], "信義": [25.0330, 121.5650], "象山": [25.0250, 121.5750],
+      "植物園": [25.0310, 121.5090], "中正": [25.0320, 121.5190], "大同": [25.0630, 121.5130], "延平": [25.0550, 121.5080],
+      "萬華": [25.0330, 121.4980], "西門": [25.0420, 121.5050], "貓空": [24.9680, 121.5880], "木柵": [24.9880, 121.5700]
+    };
+    const DISTRICT_MAP = {
+      "北投區": ["貴子坑", "百拉卡"], "士林區": ["社子", "溪山"], "內湖區": ["內湖", "大湖"], "中山區": ["中山", "大直"],
+      "松山區": ["松山", "民生"], "南港區": ["南港", "舊莊"], "大安區": ["大安", "公館"], "信義區": ["信義", "象山"],
+      "中正區": ["植物園", "中正"], "大同區": ["大同", "延平"], "萬華區": ["萬華", "西門"], "文山區": ["貓空", "木柵"]
+    };
+
+    let markersLayer = L.layerGroup().addTo(map);
+    let isSimulating = false; // 全局模擬狀態旗標
+
+    function getRainColor(mm) {
+      if (mm <= 0.0) return '#00d4ff'; 
+      if (mm < 1.0)  return '#00ff88'; 
+      if (mm < 10.0) return '#ffb800'; 
+      return '#ff1744';                
+    }
+
+    // --- Canvas 粒子特效系統 ---
+    const canvas = document.getElementById('rain-canvas');
+    const ctx = canvas.getContext('2d');
+    let width = canvas.width = window.innerWidth;
+    let height = canvas.height = window.innerHeight;
+    window.addEventListener('resize', () => { width = canvas.width = window.innerWidth; height = canvas.height = window.innerHeight; });
+
+    let rainZones = []; 
+    let particles = [];
+    const MAX_PARTICLES = 600;
+
+    function renderRain() {
+      ctx.clearRect(0, 0, width, height);
+      const activeScreenZones = rainZones.map(zone => {
+        const point = map.latLngToContainerPoint(zone.latlng);
+        return { x: point.x, y: point.y, r: 50 + (zone.rain * 4), rain: zone.rain };
+      }).filter(z => z.x > 0 && z.x < width && z.y > 0 && z.y < height);
+
+      if (activeScreenZones.length > 0 && particles.length < MAX_PARTICLES) {
+        const target = activeScreenZones[Math.floor(Math.random() * activeScreenZones.length)];
+        const spawnCount = Math.min(Math.floor(target.rain / 2) + 1, 5); 
+        for(let i = 0; i < spawnCount; i++) {
+          particles.push({
+            x: target.x + (Math.random() * target.r * 2 - target.r),
+            y: target.y - target.r - (Math.random() * 100),
+            length: Math.random() * 10 + 10 + (target.rain * 0.5),
+            speed: Math.random() * 5 + 10 + (target.rain * 0.3),
+            wind: Math.random() * 2 + 1,
+            opacity: Math.random() * 0.4 + 0.2
+          });
+        }
+      }
+
+      for (let i = particles.length - 1; i >= 0; i--) {
+        let p = particles[i];
+        p.y += p.speed;
+        p.x += p.wind; 
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x + p.wind, p.y + p.length);
+        ctx.strokeStyle = `rgba(136, 212, 255, ${p.opacity})`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        if (p.y > height || p.x > width) particles.splice(i, 1);
+      }
+      requestAnimationFrame(renderRain);
+    }
+    renderRain();
+
+    // --- 資料更新邏輯 ---
+    async function fetchData() {
+      if(isSimulating) return; // 如果正在模擬，不抓取真實資料覆蓋畫面
+      
+      try {
+        const url = encodeURIComponent('https://wic.gov.taipei/OpenData/API/Rain/Get?stationNo=&loginId=open_rain&dataKey=85452C1D');
+        const res = await fetch(`https://api.allorigins.win/get?url=${url}`);
+        if (!res.ok) throw new Error();
+        const proxyData = await res.json();
+        const rawData = typeof proxyData.contents === 'string' ? JSON.parse(proxyData.contents) : proxyData.contents;
+        updateSystem(rawData);
+      } catch (err) {
+        if(!isSimulating) updateSystem(loadDemoData());
+      }
+    }
+
+    function updateSystem(rawData) {
+      // ✅ 修改處：確保同時支援 API 格式 (stationName/recTime) 與模擬資料格式 (name/time)
+      const stations = (Array.isArray(rawData) ? rawData : []).map(item => ({
+        name: (item.stationName || item.name || '').trim(),
+        rain: parseFloat(item.rain) > 0 ? parseFloat(item.rain) : 0,
+        time: (item.recTime || item.time || '').trim()
+      }));
+
+      markersLayer.clearLayers();
+      rainZones = []; 
+      let districtGroups = {};
+      Object.keys(DISTRICT_MAP).forEach(d => districtGroups[d] = { rainSum: 0, count: 0 });
+
+      let latestTime = '';
+      const mergedStations = Object.keys(STATION_COORDS).map(stName => {
+        return stations.find(s => s.name === stName) || { name: stName, rain: 0, time: new Date().toLocaleString('zh-TW', { hour12: false }) };
+      });
+
+      mergedStations.forEach(st => {
+        if (st.time > latestTime) latestTime = st.time;
+        let dName = Object.keys(DISTRICT_MAP).find(d => DISTRICT_MAP[d].includes(st.name));
+        if (dName) { districtGroups[dName].rainSum += st.rain; districtGroups[dName].count += 1; }
+
+        if (STATION_COORDS[st.name]) {
+          if (st.rain > 0) rainZones.push({ latlng: STATION_COORDS[st.name], rain: st.rain });
+          const color = getRainColor(st.rain);
+          const marker = L.circleMarker(STATION_COORDS[st.name], {
+            radius: 6 + (st.rain * 0.4), fillColor: color, color: '#ffffff', weight: 1.5, opacity: 0.85, fillOpacity: 0.75
+          });
+          marker.bindPopup(`
+            <div class="popup-container">
+              <div class="popup-title">📍 ${dName || '臺北市'} · ${st.name}站</div>
+              <div class="popup-row">
+                <span style="color:#aaa;">即時雨量</span><span class="popup-value" style="color:${color}">${st.rain.toFixed(1)} mm</span>
+              </div>
+            </div>
+          `);
+          markersLayer.addLayer(marker);
+        }
+      });
+
+      // 根據是否模擬更換 UI 狀態
+      if (isSimulating) {
+        document.getElementById('update-time').innerText = `SIMULATION MODE : ${latestTime}`;
+        document.getElementById('status-dot').className = 'live-dot sim-mode';
+        document.getElementById('title-panel').style.border = '1px solid rgba(255, 184, 0, 0.5)';
+      } else {
+        document.getElementById('update-time').innerText = `DATA UPDATE : ${latestTime}`;
+        document.getElementById('status-dot').className = 'live-dot';
+        document.getElementById('title-panel').style.border = '1px solid var(--border-glow)';
+      }
+
+      const listContainer = document.getElementById('district-list');
+      listContainer.innerHTML = '';
+      let totalRainSum = 0, totalDistricts = 0, maxAvg = 1;
+
+      Object.keys(DISTRICT_MAP).forEach(d => {
+        const avg = districtGroups[d].count > 0 ? (districtGroups[d].rainSum / districtGroups[d].count) : 0;
+        if (avg > maxAvg) maxAvg = avg;
+      });
+
+      Object.keys(DISTRICT_MAP).forEach(d => {
+        const avg = districtGroups[d].count > 0 ? (districtGroups[d].rainSum / districtGroups[d].count) : 0;
+        if (districtGroups[d].count > 0) { totalRainSum += avg; totalDistricts++; }
+        const color = getRainColor(avg);
+        const barWidth = Math.min((avg / maxAvg) * 100, 100);
+        listContainer.innerHTML += `
+          <div class="summary-item">
+            <div class="item-meta">
+              <div class="district-name">${d}</div>
+              <div class="district-data" style="color: ${color};">${avg.toFixed(1)} <span style="font-size:10px; color:#6a7e95;">mm</span></div>
+            </div>
+            <div class="rain-bar-bg"><div class="rain-bar-fill" style="width: ${barWidth}%; background: ${color}; box-shadow: 0 0 6px ${color};"></div></div>
+          </div>
+        `;
+      });
+      document.getElementById('total-avg').innerText = `${totalDistricts > 0 ? (totalRainSum / totalDistricts).toFixed(2) : '0.00'} mm`;
+    }
+
+    function loadDemoData() {
+      const t = new Date().toLocaleString('zh-TW', { hour12: false });
+      return [ { name: '南港', rain: 15.4, time: t }, { name: '信義', rain: 9.2, time: t }, { name: '社子', rain: 2.1, time: t } ];
+    }
+
+    // --- 模擬器控制事件 ---
+    document.getElementById('btn-start-sim').addEventListener('click', () => {
+      const targetDistrict = document.getElementById('sim-district').value;
+      if (!targetDistrict) return alert("請先從下拉選單選擇一個行政區！");
+      
+      isSimulating = true;
+      let fakeData = [];
+      const t = new Date().toLocaleString('zh-TW', { hour12: false });
+      
+      // 產生模擬資料：選擇的區域下豪雨，其他區域歸零
+      Object.keys(DISTRICT_MAP).forEach(dist => {
+        DISTRICT_MAP[dist].forEach(stationName => {
+          fakeData.push({
+            name: stationName,
+            rain: dist === targetDistrict ? 45.0 : 0, 
+            time: t
+          });
+        });
+      });
+      
+      updateSystem(fakeData);
+    });
+
+    document.getElementById('btn-stop-sim').addEventListener('click', () => {
+      isSimulating = false;
+      fetchData(); // 立即抓取真實資料覆蓋回來
+    });
+
+    fetchData();
+    setInterval(fetchData, 300000); // 每5分鐘檢查一次 (若模擬中則略過)
+  </script>
+</body>
+</html>
